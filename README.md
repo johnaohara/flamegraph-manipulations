@@ -20,6 +20,7 @@ Collection of scripts to manipulate flamegraphs and collapsed stacks
     $ /path/to/FlameGraph/flamegraph.pl /path/to/profile.folded.lambda > /path/to/profile.folded.svg
     ```
  - **ExtractFolded** - Extract the folded stacks and sample counts from a flamegraph.svg
+
     Usage: 
     ```bash
     $ java --agentpath:/path/to/libasyncProfiler.so=start,file=/path/to/profile.svg -jar /path/to/jar
