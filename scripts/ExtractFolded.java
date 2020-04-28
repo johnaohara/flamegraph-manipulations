@@ -38,9 +38,9 @@ public class ExtractFolded {
     }
 
 
-    private static final Pattern START_PATTERN = Pattern.compile("<g\\s*>");
-    private static final Pattern END_PATTERN = Pattern.compile("</g\\s*>");
-    private static final Pattern RECT_PATTERN = Pattern.compile(".*<rect.*");
+    private static final Pattern START_PATTERN = Pattern.compile("<\\s*g\\s*>");
+    private static final Pattern END_PATTERN = Pattern.compile("<\\s*/g\\s*>");
+    private static final Pattern RECT_PATTERN = Pattern.compile(".*<\\s*rect.*");
     private static final Pattern FRAME_PATTERN = Pattern.compile("(.*)\\((([0-9]*\\,*)*[0-9]*) samples, ([0-9]*.[0-9]*)\\%\\)");
 
 
@@ -71,13 +71,17 @@ public class ExtractFolded {
 
             try {
                 LineConsumer consumer = new LineConsumer();
+
+                //Read lines and parse svg elements into ordered list of StackFrames
                 Files.lines(Paths.get(path)).forEach(consumer);
 
+                //Convert ordered list of StackFrames into tree structure, with all children descending from root frames
+                //There may be multiple root frames, depending on the tool that generated the flamegraph
                 List<StackFrame> rootFrames = orderFrames(consumer.getFramesList());
-                rootFrames.forEach(rootFrame -> {
-                    StringBuilder outputBuilder = new StringBuilder();
-                    writeCallStack(rootFrame, outputBuilder);
-                });
+
+                //Write out StackFrame tree to collapsed stacks
+                rootFrames.forEach(rootFrame -> writeCallStack(rootFrame, new StringBuilder()));
+
             } catch (IOException e) {
                 e.printStackTrace();
                 return CommandResult.FAILURE;
@@ -88,6 +92,7 @@ public class ExtractFolded {
 
         private List<StackFrame> orderFrames(List<StackFrame> frameList) {
 
+            //StackFrames are ordered wrt y-axis. Ensuring all parent frames are processed before their children
             Collections.sort(frameList);
 
             AtomicReference<BigDecimal> rootFramesY = new AtomicReference<>(new BigDecimal(0));
@@ -96,18 +101,18 @@ public class ExtractFolded {
 
             frameList.forEach(extractedFrame -> {
 
-                if (rootFrames.size() == 0) {
+                if (rootFrames.isEmpty()) { //First root StackFrame, make note of y value
                     rootFramesY.set(extractedFrame.getY());
                     rootFrames.add(extractedFrame);
                 } else if ((extractedFrame.getY() == rootFramesY.get() && !rootFrames.contains(extractedFrame))) {
-                    rootFrames.add(extractedFrame);
+                    rootFrames.add(extractedFrame); //another root StackFrame
                 } else {
-                    rootFrames.forEach(rootFrame -> {
-                        if (LineConsumer.isSuperFrame(rootFrame, extractedFrame)) {
-                            LineConsumer.insertFrame(rootFrame, extractedFrame);
-                        }
-                    });
-
+                    Optional<StackFrame> parentFrame = rootFrames.stream().filter(rootFrame -> LineConsumer.isSuperFrame(rootFrame, extractedFrame)).findFirst();
+                    if(parentFrame.isPresent()){
+                        LineConsumer.insertFrame(parentFrame.get(), extractedFrame);
+                    } else {
+                        System.err.println("Could not find parent for: ".concat(extractedFrame.toString()));
+                    }
                 }
             });
 
@@ -122,15 +127,15 @@ public class ExtractFolded {
                 rootFrame.getChildStream().forEach(childFrame -> {
                     childSampleCount.addAndGet(childFrame.getSamples());
                     writeCallStack(childFrame, outputBuilder);
-                    outputBuilder.setLength(pos);
+                    outputBuilder.setLength(pos); //reset string build between calls to child StackFrames to this StackFrames position, can reuse the current StringBuilder
                 });
-                if(childSampleCount.get() <  rootFrame.getSamples()){
+                if(childSampleCount.get() <  rootFrame.getSamples()){ //some cpu samples were captured in the root StackFrame directly
                     outputBuilder.setLength(pos);
 
-                    outputBuilder.append(" ").append(rootFrame.getSamples() - childSampleCount.get());
+                    outputBuilder.append(" ").append(rootFrame.getSamples() - childSampleCount.get()); //Subtract child sample count from root StackFrame cample count
                     System.out.println(outputBuilder.toString());
                 }
-            } else {
+            } else { //This is the last child StackFrame, write out the full stack trace
                 outputBuilder.append(rootFrame.getTitle()).append(" ").append(rootFrame.getSamples());
                 System.out.println(outputBuilder.toString());
             }
@@ -169,16 +174,12 @@ public class ExtractFolded {
                     System.err.println("Potential error: Found new <rect without corresponding <g>");
                 }
             }
-
-
         }
 
         private static void insertFrame(StackFrame rootFrame, StackFrame extractedFrame) {
-            if (ischild(rootFrame, extractedFrame)) {
-                //this direct child
+            if (ischild(rootFrame, extractedFrame)) { //this direct child of rootFrame
                 rootFrame.addChild(extractedFrame);
-            } else {
-                //find next root frame
+            } else { //find next parent StackFrame in layer below
                 Optional<StackFrame> nextFrameRoot = rootFrame.getChildStream().filter( childFrame -> isSuperFrame(childFrame, extractedFrame)).findFirst();
                 if(nextFrameRoot.isPresent()){
                     insertFrame(nextFrameRoot.get(), extractedFrame);
@@ -189,17 +190,20 @@ public class ExtractFolded {
         }
 
         private static boolean ischild(StackFrame rootFrame, StackFrame extractedFrame) {
+            //check that root frame is a SuperFrame and child is a direct descendent of root frame
             return isSuperFrame(rootFrame, extractedFrame) &&
                     (extractedFrame.getY().add(extractedFrame.getHeight()).add(new BigDecimal(1)).compareTo(rootFrame.getY()) == 0);
         }
 
         private static boolean isSuperFrame(StackFrame rootFrame, StackFrame extractedFrame) {
+            //a SuperFrame is a frame that encapsulates the extractedFrame wrt x axis
             return extractedFrame.getX().compareTo(rootFrame.getX()) >= 0
                     && extractedFrame.getX().add(extractedFrame.getWidth()).compareTo(rootFrame.getX().add(rootFrame.getWidth())) <= 0;
 
         }
 
         private static StackFrame extractStackFrame(String line) {
+            //extract frame attributes from html element
             Document snippet = Jsoup.parse(line);
             String x = snippet.select("rect[x]").first().attr("x");
             String y = snippet.select("rect[y]").first().attr("y");
@@ -233,7 +237,6 @@ public class ExtractFolded {
                 System.err.println("Could not parse stack frame: ".concat(line));
                 return null;
             }
-
         }
     }
 
