@@ -44,7 +44,7 @@ public class ExtractFolded {
     private static final Pattern FRAME_PATTERN = Pattern.compile("(.*)\\((([0-9]*\\,*)*[0-9]*) samples, ([0-9]*.[0-9]*)\\%\\)");
 
 
-    @CommandDefinition(name = "LambdaNormalize", description = "Flamegraph Lambda name normalizer")
+    @CommandDefinition(name = "ExtractFolded", description = "Extract folded stack traces from Flamegraph .svg")
     public static class Cmd implements Command {
 
         private static final String DELIMITER = ";";
@@ -80,7 +80,11 @@ public class ExtractFolded {
                 List<StackFrame> rootFrames = orderFrames(consumer.getFramesList());
 
                 //Write out StackFrame tree to collapsed stacks
-                rootFrames.forEach(rootFrame -> writeCallStack(rootFrame, new StringBuilder()));
+                if(rootFrames.size()>1) {
+                    rootFrames.forEach(rootFrame -> writeCallStack(rootFrame, new StringBuilder()));
+                } else { //omit the root frame if there is only one
+                    rootFrames.stream().findFirst().get().getChildStream().forEach(rootFrame -> writeCallStack(rootFrame, new StringBuilder()));
+                }
 
             } catch (IOException e) {
                 e.printStackTrace();
